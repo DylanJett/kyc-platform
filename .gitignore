@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+frontend/.next/
+
+# Environment
+.env
+.env.local
+
+# Docker volumes
+postgres_data/
+minio_data/
+
+# OS
+.DS_Store
