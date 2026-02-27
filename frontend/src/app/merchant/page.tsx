@@ -197,15 +197,26 @@ export default function MerchantPage() {
 
           <Field label="Country" value={form.country} onChange={v => set('country', v)} onBlur={() => touch('country')} invalid={isInvalid('country')} placeholder="United Arab Emirates" error="Country is required" disabled={!canEdit} />
           <Field label="Website" value={form.website} onChange={v => set('website', v)} onBlur={() => touch('website')} invalid={isInvalid('website')} placeholder="https://example.com" error="Website is required" disabled={!canEdit} />
-          <Field label="Business Description" value={form.business_description} onChange={v => set('business_description', v)} onBlur={() => touch('business_description')} invalid={isInvalid('business_description')} placeholder="What does your business do?" error="Business description is required" disabled={!canEdit} />
+          <label style={labelStyle}>Business Description</label>
+          <textarea
+            style={{ ...inputStyle, height: 100, resize: 'vertical', borderColor: isInvalid('business_description') ? '#ef4444' : '#d1d5db' }}
+            value={form.business_description}
+            onChange={e => set('business_description', e.target.value)}
+            onBlur={() => touch('business_description')}
+            placeholder="What does your business do?"
+            disabled={!canEdit} />
+          {isInvalid('business_description') && <p style={errStyle}>Business description is required</p>}
 
-          <label style={labelStyle}>Expected Monthly Volume (USD)</label>
+          <label style={labelStyle}>Expected Monthly Volume (AED)</label>
           <input
             style={{ ...inputStyle, borderColor: isInvalid('monthly_volume') ? '#ef4444' : '#d1d5db' }}
-            value={form.monthly_volume}
-            onChange={e => set('monthly_volume', e.target.value)}
+            value={form.monthly_volume ? Number(form.monthly_volume.replace(/\s/g, '')).toLocaleString('en-US').replace(/,/g, ' ') : ''}
+            onChange={e => {
+              const raw = e.target.value.replace(/\s/g, '')
+              if (raw === '' || /^\d+$/.test(raw)) set('monthly_volume', raw)
+            }}
             onBlur={() => touch('monthly_volume')}
-            placeholder="10000"
+            placeholder="85 000"
             disabled={!canEdit} />
           {isInvalid('monthly_volume') && <p style={errStyle}>{!form.monthly_volume ? 'Monthly volume is required' : 'Please enter a valid amount (numbers only)'}</p>}
 
