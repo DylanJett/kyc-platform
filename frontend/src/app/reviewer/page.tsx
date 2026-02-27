@@ -68,7 +68,7 @@ export default function ReviewerPage() {
         <Row label="Country" value={selected.country} />
         <Row label="Website" value={selected.website} />
         <Row label="Description" value={selected.business_description} />
-        <Row label="Monthly volume" value={selected.monthly_volume} />
+        <Row label="Monthly volume (AED)" value={selected.monthly_volume ? Number(selected.monthly_volume).toLocaleString('en-US').replace(/,/g, ' ') : null} />
         <Row label="Phone" value={selected.contact_phone} />
         <Row label="Address" value={selected.contact_address} />
 
