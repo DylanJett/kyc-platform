@@ -62,7 +62,25 @@ func (m *MinIOClient) Upload(file multipart.File, header *multipart.FileHeader, 
 	return path, nil
 }
 
-// GetObject — возвращает файл напрямую из MinIO
+// UploadFromReader uploads a file from an io.Reader (used when file content was already read for validation)
+func (m *MinIOClient) UploadFromReader(reader io.Reader, header *multipart.FileHeader, appID string) (string, error) {
+	path := fmt.Sprintf("%s/%d_%s", appID, time.Now().UnixNano(), header.Filename)
+
+	_, err := m.client.PutObject(
+		context.Background(),
+		m.bucket,
+		path,
+		reader,
+		header.Size,
+		minio.PutObjectOptions{ContentType: header.Header.Get("Content-Type")},
+	)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// GetObject returns a file directly from MinIO
 func (m *MinIOClient) GetObject(path string) (*minio.Object, *minio.ObjectInfo, error) {
 	obj, err := m.client.GetObject(context.Background(), m.bucket, path, minio.GetObjectOptions{})
 	if err != nil {
