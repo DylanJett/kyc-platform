@@ -40,7 +40,7 @@ func Register(db *sql.DB) gin.HandlerFunc {
 
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 10)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка хеширования пароля"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Password hashing error"})
 			return
 		}
 
@@ -53,10 +53,10 @@ func Register(db *sql.DB) gin.HandlerFunc {
 
 		if err != nil {
 			if strings.Contains(err.Error(), "unique") {
-				c.JSON(http.StatusConflict, gin.H{"error": "Email уже зарегистрирован"})
+				c.JSON(http.StatusConflict, gin.H{"error": "Email is already registered"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания пользователя"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 			return
 		}
 
@@ -79,12 +79,12 @@ func Login(db *sql.DB) gin.HandlerFunc {
 		).Scan(&id, &hash, &role)
 
 		if err == sql.ErrNoRows {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный email или пароль"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 			return
 		}
 
 		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)); err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный email или пароль"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 			return
 		}
 
@@ -95,7 +95,6 @@ func Login(db *sql.DB) gin.HandlerFunc {
 
 func Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Токен можно передать через заголовок или query параметр ?token=...
 		tokenStr := ""
 		header := c.GetHeader("Authorization")
 		if strings.HasPrefix(header, "Bearer ") {
@@ -116,7 +115,7 @@ func Middleware() gin.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Невалидный токен"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			return
 		}
 
