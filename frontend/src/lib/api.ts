@@ -31,6 +31,11 @@ export async function getMyApplication() {
   return res.json()
 }
 
+export async function getMyApplications() {
+  const res = await fetch(`${API}/api/application/list`, { headers: headers() })
+  return res.json()
+}
+
 export async function createApplication(data: object) {
   const res = await fetch(`${API}/api/application`, {
     method: 'POST', headers: headers(), body: JSON.stringify(data)
@@ -45,8 +50,22 @@ export async function updateApplication(data: object) {
   return res.json()
 }
 
+export async function updateApplicationByID(id: string, data: object) {
+  const res = await fetch(`${API}/api/application/${id}`, {
+    method: 'PUT', headers: headers(), body: JSON.stringify(data)
+  })
+  return res.json()
+}
+
 export async function submitApplication() {
   const res = await fetch(`${API}/api/application/submit`, {
+    method: 'POST', headers: headers()
+  })
+  return res.json()
+}
+
+export async function submitApplicationByID(id: string) {
+  const res = await fetch(`${API}/api/application/${id}/submit`, {
     method: 'POST', headers: headers()
   })
   return res.json()
@@ -61,6 +80,37 @@ export async function uploadDocument(file: File, docType: string) {
     headers: { 'Authorization': `Bearer ${getToken()}` },
     body: form
   })
+  return res.json()
+}
+
+export async function uploadDocumentForApp(appId: string, file: File, docType: string) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('doc_type', docType)
+  const res = await fetch(`${API}/api/application/${appId}/documents`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${getToken()}` },
+    body: form
+  })
+  return res.json()
+}
+
+export async function addOwner(appId: string, data: object) {
+  const res = await fetch(`${API}/api/application/${appId}/owners`, {
+    method: 'POST', headers: headers(), body: JSON.stringify(data)
+  })
+  return res.json()
+}
+
+export async function deleteOwner(appId: string, ownerId: string) {
+  const res = await fetch(`${API}/api/application/${appId}/owners/${ownerId}`, {
+    method: 'DELETE', headers: headers()
+  })
+  return res.json()
+}
+
+export async function getOwners(appId: string) {
+  const res = await fetch(`${API}/api/application/${appId}/owners`, { headers: headers() })
   return res.json()
 }
 
