@@ -15,13 +15,13 @@ import (
 func main() {
 	database, err := db.Connect()
 	if err != nil {
-		log.Fatalf("Не удалось подключиться к БД: %v", err)
+		log.Fatalf("Failed to connect to DB: %v", err)
 	}
 	defer database.Close()
 
 	store, err := storage.NewMinIO()
 	if err != nil {
-		log.Fatalf("Не удалось подключиться к MinIO: %v", err)
+		log.Fatalf("Failed to connect to MinIO: %v", err)
 	}
 
 	r := gin.Default()
@@ -42,12 +42,21 @@ func main() {
 
 	api := r.Group("/api", auth.Middleware())
 	{
+		// Merchant routes
 		api.GET("/application", merchant.GetMyApplication(database))
+		api.GET("/application/list", merchant.GetMyApplications(database))
 		api.POST("/application", merchant.CreateApplication(database))
 		api.PUT("/application", merchant.UpdateApplication(database))
+		api.PUT("/application/:id", merchant.UpdateApplicationByID(database))
 		api.POST("/application/submit", merchant.SubmitApplication(database))
+		api.POST("/application/:id/submit", merchant.SubmitApplicationByID(database))
 		api.POST("/application/documents", merchant.UploadDocument(database, store))
+		api.POST("/application/:id/documents", merchant.UploadDocumentForApp(database, store))
+		api.POST("/application/:id/owners", merchant.AddOwner(database))
+		api.DELETE("/application/:id/owners/:ownerId", merchant.DeleteOwner(database))
+		api.GET("/application/:id/owners", merchant.GetOwners(database))
 
+		// Reviewer routes
 		api.GET("/applications", reviewer.ListApplications(database))
 		api.GET("/applications/:id", reviewer.GetApplication(database))
 		api.POST("/applications/:id/review", reviewer.ReviewApplication(database))
@@ -58,6 +67,6 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	log.Printf("Сервер запущен на :%s", port)
+	log.Printf("Server started on :%s", port)
 	r.Run(":" + port)
 }
