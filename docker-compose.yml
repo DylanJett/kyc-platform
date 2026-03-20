@@ -15,6 +15,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+      - ./backend/migrations/002_extend_schema.sql:/docker-entrypoint-initdb.d/002_extend_schema.sql
 
   minio:
     image: minio/minio:latest
