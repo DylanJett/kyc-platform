@@ -3,11 +3,12 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   getMyApplications, createApplication, updateApplicationByID,
-  submitApplicationByID, uploadDocumentForApp, addOwner, deleteOwner, getOwners
+  submitApplicationByID, uploadDocumentForApp, addOwner, updateOwner, deleteOwner, getOwners
 } from '@/lib/api'
 import {
   MCC_CODES, COUNTRIES, BUSINESS_ACTIVITIES, SETTLEMENT_FREQUENCIES,
-  CURRENCIES, STORE_TYPES, DOC_TYPES, IDENTITY_TYPES
+  CURRENCIES, STORE_TYPES, DOC_TYPES, IDENTITY_TYPES,
+  GENERAL_DOCS, IDENTITY_TYPE_TO_DOC_TYPE, IDENTITY_TYPE_TO_LABEL
 } from '@/lib/reference'
 
 const STEPS = ['Business', 'Contact & Settlement', 'Owners', 'Documents', 'Preview']
@@ -46,8 +47,13 @@ export default function MerchantPage() {
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null)
   const [owners, setOwners] = useState<any[]>([])
   const [showOwnerForm, setShowOwnerForm] = useState(false)
+  const [editingOwnerId, setEditingOwnerId] = useState<string | null>(null)
   const [ownerForm, setOwnerForm] = useState({ ownership_type: 'shareHolder', owner_type: 'individual', first_name: '', last_name: '', company_name: '', email: '', identity_type: 'emiratesId' })
   const [showConfirm, setShowConfirm] = useState(false)
+  const [expandedOwners, setExpandedOwners] = useState<Record<string, boolean>>({})
+  const [otherDocSlots, setOtherDocSlots] = useState<number[]>([])
+  const [otherDocCounter, setOtherDocCounter] = useState(0)
+  const [docError, setDocError] = useState('')
   const [view, setView] = useState<'list' | 'form'>('list')
   const [mccSearch, setMccSearch] = useState('')
   const [countrySearch, setCountrySearch] = useState('')
@@ -60,6 +66,15 @@ export default function MerchantPage() {
     if (!token) { router.push('/login'); return }
     loadApps(true) // autoRedirect: go to new form if no active apps
   }, [])
+
+  // Sole trader auto-show: when entering Step 2, auto-open individual shareholder form
+  const isSoleTrader = form.store_type === 'soleTrader'
+  useEffect(() => {
+    if (step === 2 && isSoleTrader && owners.length === 0) {
+      setShowOwnerForm(true)
+      setOwnerForm({ ownership_type: 'shareHolder', owner_type: 'individual', first_name: '', last_name: '', company_name: '', email: '', identity_type: 'emiratesId' })
+    }
+  }, [step, isSoleTrader, owners.length])
 
   const ACTIVE_STATUSES = ['draft', 'pending', 'needs_more_docs']
 
@@ -105,19 +120,34 @@ export default function MerchantPage() {
     })
     setMccSearch(app.mcc ? `${app.mcc} — ${MCC_CODES.find(m => m.code === app.mcc)?.label || ''}` : '')
     setCountrySearch(app.country || '')
-    // Load existing uploaded docs and validation from app.documents
+    // Load existing uploaded docs — reconstruct UI keys from owner_id
     const docs: Record<string, string> = {}
     const validations: Record<string, { status: string, errors?: string[], details?: string }> = {}
+    const requiredKeys = GENERAL_DOCS.map(d => d.key)
+    let otherIdx = 0
+    const loadedOtherSlots: number[] = []
     if (app.documents) {
       app.documents.forEach((d: any) => {
-        docs[d.doc_type] = d.original_name
+        let uiKey: string
+        if (d.owner_id) {
+          uiKey = `owner_${d.owner_id}_identity`
+        } else if (requiredKeys.includes(d.doc_type)) {
+          uiKey = d.doc_type
+        } else {
+          uiKey = `other_${otherIdx}`
+          loadedOtherSlots.push(otherIdx)
+          otherIdx++
+        }
+        docs[uiKey] = d.original_name
         if (d.validation_status) {
-          validations[d.doc_type] = { status: d.validation_status, details: d.validation_details }
+          validations[uiKey] = { status: d.validation_status, details: d.validation_details }
         }
       })
     }
     setUploadedDocs(docs)
     setDocValidation(validations)
+    setOtherDocSlots(loadedOtherSlots)
+    setOtherDocCounter(otherIdx)
     setTouched({})
     const canEdit = EDITABLE_STATUSES.includes(app.status)
     if (canEdit) {
@@ -144,6 +174,10 @@ export default function MerchantPage() {
     setDocValidation({})
     setTouched({})
     setOwners([])
+    setOtherDocSlots([])
+    setOtherDocCounter(0)
+    setDocError('')
+    setEditingOwnerId(null)
     setStep(0)
     setView('form')
     setShowConfirm(false)
@@ -156,17 +190,39 @@ export default function MerchantPage() {
   const step0Fields = ['business_name', 'mcc', 'store_type', 'country', 'city', 'address_line1', 'website', 'business_activities', 'monthly_volume']
   const step1Fields = ['owner_name', 'contact_phone', 'contact_email', 'settlement_currency', 'settlement_bank_name', 'settlement_bank_iban', 'settlement_frequency']
 
-  const isVolumInvalid = (v: string) => !!v && !/^\d+(\.\d{1,2})?$/.test(v)
-  const isInvalid = (k: string) => {
-    if (!touched[k]) return false
-    if (k === 'monthly_volume') return !form.monthly_volume || isVolumInvalid(form.monthly_volume)
-    return !(form as any)[k]
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+  const phoneRegex = /^\+?[\d\s\-()]{7,20}$/
+  const ibanRegex = /^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/
+  const websiteRegex = /^https?:\/\/.+\..+/
+
+  const fieldValidators: Record<string, (v: string) => string | null> = {
+    contact_email: v => v && !emailRegex.test(v) ? 'Invalid email format (example@domain.com)' : null,
+    contact_phone: v => v && !phoneRegex.test(v) ? 'Invalid phone format (+971 50 000 0000)' : null,
+    settlement_bank_iban: v => v && !ibanRegex.test(v.replace(/\s/g, '').toUpperCase()) ? 'Invalid IBAN format' : null,
+    website: v => v && !websiteRegex.test(v) ? 'Must start with http:// or https://' : null,
+    monthly_volume: v => v && !/^\d+(\.\d{1,2})?$/.test(v) ? 'Must be a number' : null,
   }
+
+  const getFieldError = (k: string): string | null => {
+    if (!touched[k]) return null
+    const val = (form as any)[k] || ''
+    if (!val) return 'This field is required'
+    const validator = fieldValidators[k]
+    if (validator) return validator(val)
+    return null
+  }
+
+  const isInvalid = (k: string) => !!getFieldError(k)
 
   const validateStep = (fields: string[]) => {
     touchAll(fields)
-    if (fields.includes('monthly_volume') && (!form.monthly_volume || isVolumInvalid(form.monthly_volume))) return false
-    return fields.every(f => !!(form as any)[f])
+    return fields.every(f => {
+      const val = (form as any)[f] || ''
+      if (!val) return false
+      const validator = fieldValidators[f]
+      if (validator && validator(val)) return false
+      return true
+    })
   }
 
   const saveAndNext = async () => {
@@ -186,19 +242,43 @@ export default function MerchantPage() {
     setStep(s => s + 1)
   }
 
-  const handleUpload = async (docKey: string, file: File) => {
-    if (!currentApp?.id) return
-    setUploadingDoc(docKey)
-    // Clear previous validation for this doc type
-    setDocValidation(v => { const n = { ...v }; delete n[docKey]; return n })
+  // Resolve UI key to API doc_type and optional ownerId
+  const resolveDocType = (uiKey: string): { apiDocType: string, ownerId?: string } => {
+    if (uiKey.startsWith('owner_') && uiKey.endsWith('_identity')) {
+      const ownerId = uiKey.replace('owner_', '').replace('_identity', '')
+      const owner = owners.find((o: any) => o.id === ownerId)
+      const apiDocType = IDENTITY_TYPE_TO_DOC_TYPE[owner?.identity_type] || 'other'
+      return { apiDocType, ownerId }
+    }
+    if (uiKey.startsWith('other_')) return { apiDocType: 'business_documents' }
+    return { apiDocType: uiKey }
+  }
 
-    const res = await uploadDocumentForApp(currentApp.id, file, docKey)
+  const handleUpload = async (uiKey: string, file: File) => {
+    if (!currentApp?.id) return
+    setUploadingDoc(uiKey)
+    setDocError('')
+    setDocValidation(v => { const n = { ...v }; delete n[uiKey]; return n })
+
+    const { apiDocType, ownerId } = resolveDocType(uiKey)
+
+    // Name matching context
+    let matchName: string | undefined
+    let businessName: string | undefined
+    if (ownerId) {
+      const owner = owners.find((o: any) => o.id === ownerId)
+      if (owner) matchName = owner.company_name || `${owner.first_name || ''} ${owner.last_name || ''}`.trim()
+    }
+    if (['utility_bill', 'tax'].includes(apiDocType)) {
+      businessName = form.business_name
+    }
+
+    const res = await uploadDocumentForApp(currentApp.id, file, apiDocType, ownerId, matchName, businessName)
 
     if (res.error) {
-      // Validation failed — show errors but don't mark as uploaded
       setDocValidation(v => ({
         ...v,
-        [docKey]: {
+        [uiKey]: {
           status: res.validation_status || 'rejected',
           errors: res.validation_errors || [res.error],
           details: res.validation_details || res.error
@@ -208,11 +288,10 @@ export default function MerchantPage() {
       return
     }
 
-    // Upload succeeded
-    setUploadedDocs(d => ({ ...d, [docKey]: file.name }))
+    setUploadedDocs(d => ({ ...d, [uiKey]: file.name }))
     setDocValidation(v => ({
       ...v,
-      [docKey]: {
+      [uiKey]: {
         status: res.validation_status || 'passed',
         errors: res.validation_errors,
         details: res.validation_details
@@ -224,17 +303,57 @@ export default function MerchantPage() {
   const handleAddOwner = async () => {
     if (!currentApp?.id) return
     setSaving(true)
-    await addOwner(currentApp.id, ownerForm)
-    await loadOwners(currentApp.id)
+
+    if (editingOwnerId) {
+      // Update existing owner
+      const oldOwner = owners.find((o: any) => o.id === editingOwnerId)
+      await updateOwner(currentApp.id, editingOwnerId, ownerForm)
+      await loadOwners(currentApp.id)
+
+      // If name or identity type changed and doc was uploaded, invalidate it
+      const uiKey = `owner_${editingOwnerId}_identity`
+      if (oldOwner && uploadedDocs[uiKey]) {
+        const oldName = oldOwner.company_name || `${oldOwner.first_name || ''} ${oldOwner.last_name || ''}`.trim()
+        const newName = ownerForm.company_name || `${ownerForm.first_name || ''} ${ownerForm.last_name || ''}`.trim()
+        if (oldName !== newName || oldOwner.identity_type !== ownerForm.identity_type) {
+          // Clear uploaded doc — require re-upload
+          setUploadedDocs(d => { const n = { ...d }; delete n[uiKey]; return n })
+          setDocValidation(v => { const n = { ...v }; delete n[uiKey]; return n })
+        }
+      }
+      setEditingOwnerId(null)
+    } else {
+      await addOwner(currentApp.id, ownerForm)
+      await loadOwners(currentApp.id)
+    }
+
     setShowOwnerForm(false)
     setOwnerForm({ ownership_type: 'shareHolder', owner_type: 'individual', first_name: '', last_name: '', company_name: '', email: '', identity_type: 'emiratesId' })
     setSaving(false)
+  }
+
+  const handleEditOwner = (o: any) => {
+    setEditingOwnerId(o.id)
+    setOwnerForm({
+      ownership_type: o.ownership_type || 'shareHolder',
+      owner_type: o.owner_type || 'individual',
+      first_name: o.first_name || '',
+      last_name: o.last_name || '',
+      company_name: o.company_name || '',
+      email: o.email || '',
+      identity_type: o.identity_type || 'emiratesId',
+    })
+    setShowOwnerForm(true)
   }
 
   const handleDeleteOwner = async (ownerId: string) => {
     if (!currentApp?.id) return
     await deleteOwner(currentApp.id, ownerId)
     await loadOwners(currentApp.id)
+    // Clear any uploaded doc for this owner
+    const uiKey = `owner_${ownerId}_identity`
+    setUploadedDocs(d => { const n = { ...d }; delete n[uiKey]; return n })
+    setDocValidation(v => { const n = { ...v }; delete n[uiKey]; return n })
   }
 
   const handleSubmit = async () => {
@@ -352,10 +471,10 @@ export default function MerchantPage() {
         {step === 0 && <>
           <h3 style={h3}>Business information</h3>
 
-          <Field label="Store / Company Name *" value={form.business_name} onChange={v => set('business_name', v)} onBlur={() => touch('business_name')} invalid={isInvalid('business_name')} placeholder="Acme Inc." error="Company name is required" disabled={!canEdit} />
+          <Field label="Store / Company Name" value={form.business_name} onChange={v => set('business_name', v)} onBlur={() => touch('business_name')} invalid={isInvalid('business_name')} placeholder="Acme Inc." error={getFieldError('business_name')} disabled={!canEdit} />
 
           {/* Store Type */}
-          <label style={labelStyle}>Store Type *</label>
+          <label style={labelStyle}>Store Type</label>
           <select style={{ ...inputStyle, borderColor: isInvalid('store_type') ? '#ef4444' : '#d1d5db' }}
             value={form.store_type}
             onChange={e => set('store_type', e.target.value)}
@@ -367,7 +486,7 @@ export default function MerchantPage() {
           {isInvalid('store_type') && <p style={errStyle}>Store type is required</p>}
 
           {/* MCC with search */}
-          <label style={labelStyle}>MCC Code *</label>
+          <label style={labelStyle}>MCC Code</label>
           <div style={{ position: 'relative' }}>
             <input
               style={{ ...inputStyle, borderColor: isInvalid('mcc') ? '#ef4444' : '#d1d5db' }}
@@ -392,7 +511,7 @@ export default function MerchantPage() {
           {isInvalid('mcc') && <p style={errStyle}>MCC code is required</p>}
 
           {/* Country with search */}
-          <label style={labelStyle}>Country *</label>
+          <label style={labelStyle}>Country</label>
           <div style={{ position: 'relative' }}>
             <input
               style={{ ...inputStyle, borderColor: isInvalid('country') ? '#ef4444' : '#d1d5db' }}
@@ -416,14 +535,14 @@ export default function MerchantPage() {
           </div>
           {isInvalid('country') && <p style={errStyle}>Country is required</p>}
 
-          <Field label="City *" value={form.city} onChange={v => set('city', v)} onBlur={() => touch('city')} invalid={isInvalid('city')} placeholder="Dubai" error="City is required" disabled={!canEdit} />
-          <Field label="Address Line 1 *" value={form.address_line1} onChange={v => set('address_line1', v)} onBlur={() => touch('address_line1')} invalid={isInvalid('address_line1')} placeholder="123 Main Street" error="Address is required" disabled={!canEdit} />
+          <Field label="City" value={form.city} onChange={v => set('city', v)} onBlur={() => touch('city')} invalid={isInvalid('city')} placeholder="Dubai" error={getFieldError('city')} disabled={!canEdit} />
+          <Field label="Address Line 1" value={form.address_line1} onChange={v => set('address_line1', v)} onBlur={() => touch('address_line1')} invalid={isInvalid('address_line1')} placeholder="123 Main Street" error={getFieldError('address_line1')} disabled={!canEdit} />
           <Field label="Address Line 2" value={form.address_line2} onChange={v => set('address_line2', v)} placeholder="Suite 100 (optional)" disabled={!canEdit} />
 
-          <Field label="Website *" value={form.website} onChange={v => set('website', v)} onBlur={() => touch('website')} invalid={isInvalid('website')} placeholder="https://example.com" error="Website is required" disabled={!canEdit} />
+          <Field label="Website" value={form.website} onChange={v => set('website', v)} onBlur={() => touch('website')} invalid={isInvalid('website')} placeholder="https://example.com" error={getFieldError('website')} disabled={!canEdit} />
 
           {/* Business Activities */}
-          <label style={labelStyle}>Business Activities *</label>
+          <label style={labelStyle}>Business Activities</label>
           <select style={{ ...inputStyle, borderColor: isInvalid('business_activities') ? '#ef4444' : '#d1d5db' }}
             value={form.business_activities}
             onChange={e => set('business_activities', e.target.value)}
@@ -442,7 +561,7 @@ export default function MerchantPage() {
             placeholder="Brief description of your business operations"
             disabled={!canEdit} />
 
-          <label style={labelStyle}>Expected Monthly Volume (AED) *</label>
+          <label style={labelStyle}>Expected Monthly Volume (AED)</label>
           <input
             style={{ ...inputStyle, borderColor: isInvalid('monthly_volume') ? '#ef4444' : '#d1d5db' }}
             value={form.monthly_volume ? Number(form.monthly_volume.replace(/\s/g, '')).toLocaleString('en-US').replace(/,/g, ' ') : ''}
@@ -470,14 +589,14 @@ export default function MerchantPage() {
         {/* ===== Step 1: Contact & Settlement ===== */}
         {step === 1 && <>
           <h3 style={h3}>Contact & Settlement details</h3>
-          <Field label="Owner / Contact Name *" value={form.owner_name} onChange={v => set('owner_name', v)} onBlur={() => touch('owner_name')} invalid={isInvalid('owner_name')} placeholder="John Smith" error="Owner name is required" disabled={!canEdit} />
-          <Field label="Contact Phone *" value={form.contact_phone} onChange={v => set('contact_phone', v)} onBlur={() => touch('contact_phone')} invalid={isInvalid('contact_phone')} placeholder="+971 50 000 0000" error="Phone is required" disabled={!canEdit} />
-          <Field label="Contact Email *" value={form.contact_email} onChange={v => set('contact_email', v)} onBlur={() => touch('contact_email')} invalid={isInvalid('contact_email')} placeholder="contact@company.com" error="Email is required" disabled={!canEdit} />
+          <Field label="Owner / Contact Name" value={form.owner_name} onChange={v => set('owner_name', v)} onBlur={() => touch('owner_name')} invalid={isInvalid('owner_name')} placeholder="John Smith" error={getFieldError('owner_name')} disabled={!canEdit} />
+          <Field label="Contact Phone" value={form.contact_phone} onChange={v => set('contact_phone', v)} onBlur={() => touch('contact_phone')} invalid={isInvalid('contact_phone')} placeholder="+971 50 000 0000" error={getFieldError('contact_phone')} disabled={!canEdit} />
+          <Field label="Contact Email" value={form.contact_email} onChange={v => set('contact_email', v)} onBlur={() => touch('contact_email')} invalid={isInvalid('contact_email')} placeholder="contact@company.com" error={getFieldError('contact_email')} disabled={!canEdit} />
 
           <div style={{ borderTop: '1px solid #e5e7eb', margin: '20px 0', paddingTop: 20 }}>
             <h4 style={{ margin: '0 0 16px', fontSize: 16, color: '#374151' }}>Settlement Information</h4>
 
-            <label style={labelStyle}>Settlement Currency *</label>
+            <label style={labelStyle}>Settlement Currency</label>
             <select style={{ ...inputStyle, borderColor: isInvalid('settlement_currency') ? '#ef4444' : '#d1d5db' }}
               value={form.settlement_currency}
               onChange={e => set('settlement_currency', e.target.value)}
@@ -488,10 +607,10 @@ export default function MerchantPage() {
             </select>
             {isInvalid('settlement_currency') && <p style={errStyle}>Currency is required</p>}
 
-            <Field label="Bank Name *" value={form.settlement_bank_name} onChange={v => set('settlement_bank_name', v)} onBlur={() => touch('settlement_bank_name')} invalid={isInvalid('settlement_bank_name')} placeholder="Emirates NBD" error="Bank name is required" disabled={!canEdit} />
-            <Field label="Bank IBAN *" value={form.settlement_bank_iban} onChange={v => set('settlement_bank_iban', v)} onBlur={() => touch('settlement_bank_iban')} invalid={isInvalid('settlement_bank_iban')} placeholder="AE070331234567890123456" error="IBAN is required" disabled={!canEdit} />
+            <Field label="Bank Name" value={form.settlement_bank_name} onChange={v => set('settlement_bank_name', v)} onBlur={() => touch('settlement_bank_name')} invalid={isInvalid('settlement_bank_name')} placeholder="Emirates NBD" error={getFieldError('settlement_bank_name')} disabled={!canEdit} />
+            <Field label="Bank IBAN" value={form.settlement_bank_iban} onChange={v => set('settlement_bank_iban', v)} onBlur={() => touch('settlement_bank_iban')} invalid={isInvalid('settlement_bank_iban')} placeholder="AE070331234567890123456" error={getFieldError('settlement_bank_iban')} disabled={!canEdit} />
 
-            <label style={labelStyle}>Settlement Frequency *</label>
+            <label style={labelStyle}>Settlement Frequency</label>
             <select style={{ ...inputStyle, borderColor: isInvalid('settlement_frequency') ? '#ef4444' : '#d1d5db' }}
               value={form.settlement_frequency}
               onChange={e => set('settlement_frequency', e.target.value)}
@@ -510,10 +629,12 @@ export default function MerchantPage() {
         </>}
 
         {/* ===== Step 2: Owners ===== */}
-        {step === 2 && <>
+        {step === 2 && (() => {
+          const soleTraderAutoForm = isSoleTrader && owners.length === 0 && showOwnerForm
+          return <>
           <h3 style={h3}>Owners & Signatories</h3>
           <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 16 }}>
-            Add shareholders and authorized signatories for this business.
+            {isSoleTrader ? 'Enter the individual shareholder details for this sole trader business.' : 'Add shareholders and authorized signatories for this business.'}
           </p>
 
           {owners.length > 0 && (
@@ -528,11 +649,14 @@ export default function MerchantPage() {
                     <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
                       {o.company_name || `${o.first_name || ''} ${o.last_name || ''}`.trim() || 'No name'}
                       {o.email ? ` · ${o.email}` : ''}
-                      {o.identity_type ? ` · ID: ${o.identity_type}` : ''}
+                      {o.identity_type ? ` · ID: ${IDENTITY_TYPE_TO_LABEL[o.identity_type] || o.identity_type}` : ''}
                     </div>
                   </div>
                   {canEdit && (
-                    <button onClick={() => handleDeleteOwner(o.id)} style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Remove</button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => handleEditOwner(o)} style={{ background: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Edit</button>
+                      <button onClick={() => handleDeleteOwner(o.id)} style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Remove</button>
+                    </div>
                   )}
                 </div>
               ))}
@@ -545,27 +669,30 @@ export default function MerchantPage() {
 
           {showOwnerForm && (
             <div style={{ border: '1px solid #d1d5db', borderRadius: 10, padding: 16, marginBottom: 16, background: '#f9fafb' }}>
-              <label style={labelStyle}>Role</label>
-              <select style={inputStyle} value={ownerForm.ownership_type} onChange={e => {
-                const newRole = e.target.value
-                // Authorized signatory is always individual; reset identity to emiratesId
-                setOwnerForm(f => ({
-                  ...f,
-                  ownership_type: newRole,
-                  owner_type: newRole === 'authorizedSignatory' ? '' : f.owner_type || 'individual',
-                  identity_type: newRole === 'authorizedSignatory' ? 'emiratesId' : f.identity_type,
-                }))
-              }}>
-                <option value="shareHolder">Shareholder</option>
-                <option value="authorizedSignatory">Authorized Signatory</option>
-              </select>
+              {/* Hide Role/Type selectors for sole trader auto-form */}
+              {!soleTraderAutoForm && (
+                <>
+                  <label style={labelStyle}>Role</label>
+                  <select style={inputStyle} value={ownerForm.ownership_type} onChange={e => {
+                    const newRole = e.target.value
+                    setOwnerForm(f => ({
+                      ...f,
+                      ownership_type: newRole,
+                      owner_type: newRole === 'authorizedSignatory' ? '' : f.owner_type || 'individual',
+                      identity_type: newRole === 'authorizedSignatory' ? 'emiratesId' : f.identity_type,
+                    }))
+                  }}>
+                    <option value="shareHolder">Shareholder</option>
+                    <option value="authorizedSignatory">Authorized Signatory</option>
+                  </select>
+                </>
+              )}
 
-              {ownerForm.ownership_type === 'shareHolder' && (
+              {!soleTraderAutoForm && ownerForm.ownership_type === 'shareHolder' && (
                 <>
                   <label style={labelStyle}>Type</label>
                   <select style={inputStyle} value={ownerForm.owner_type} onChange={e => {
                     const newType = e.target.value
-                    // Auto-set identity type: corporate → tradeLicense, individual → emiratesId
                     const newIdentity = newType === 'corporate' ? 'tradeLicense' : 'emiratesId'
                     setOwnerForm(f => ({ ...f, owner_type: newType, identity_type: newIdentity }))
                   }}>
@@ -606,8 +733,8 @@ export default function MerchantPage() {
               })()}
 
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button style={btnStyle} onClick={handleAddOwner} disabled={saving}>{saving ? 'Adding...' : 'Add'}</button>
-                <button style={btnOutline} onClick={() => setShowOwnerForm(false)}>Cancel</button>
+                <button style={btnStyle} onClick={handleAddOwner} disabled={saving}>{saving ? 'Saving...' : editingOwnerId ? 'Save Changes' : 'Add'}</button>
+                {!soleTraderAutoForm && <button style={btnOutline} onClick={() => { setShowOwnerForm(false); setEditingOwnerId(null) }}>Cancel</button>}
               </div>
             </div>
           )}
@@ -616,58 +743,138 @@ export default function MerchantPage() {
             <button style={btnOutline} onClick={() => setStep(1)}>← Back</button>
             <button style={btnStyle} onClick={() => setStep(3)}>Next →</button>
           </div>
-        </>}
+        </>})()}
 
         {/* ===== Step 3: Documents ===== */}
-        {step === 3 && <>
-          <h3 style={h3}>Upload documents</h3>
-          <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 20 }}>Upload the required documents for verification. Trade License is required.</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
-            {DOC_TYPES.map(doc => {
-              const val = docValidation[doc.key]
-              const isRejected = val?.status === 'rejected'
-              const isWarning = val?.status === 'warning'
-              const isPassed = uploadedDocs[doc.key] && !isRejected
-              const borderColor = isRejected ? '#ef4444' : isWarning ? '#d97706' : isPassed ? '#16a34a' : '#e5e7eb'
-              const bgColor = isRejected ? '#fef2f2' : isWarning ? '#fffbeb' : isPassed ? '#f0fdf4' : '#fafafa'
+        {step === 3 && (() => {
+          const shareholders = owners.filter((o: any) => o.ownership_type === 'shareHolder')
 
-              return (
-                <div key={doc.key} style={{ border: `1px solid ${borderColor}`, borderRadius: 10, padding: '14px 16px', background: bgColor }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 15 }}>{doc.icon} {doc.label}</div>
-                      <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>{doc.desc}</div>
-                      {isPassed && !isWarning && <div style={{ fontSize: 13, color: '#16a34a', marginTop: 4 }}>✅ {uploadedDocs[doc.key]}</div>}
-                      {isPassed && isWarning && <div style={{ fontSize: 13, color: '#d97706', marginTop: 4 }}>⚠️ {uploadedDocs[doc.key]}</div>}
-
-                      {/* Validation messages */}
-                      {val?.errors && val.errors.length > 0 && (
-                        <div style={{ marginTop: 6 }}>
-                          {val.errors.map((err: string, i: number) => (
-                            <div key={i} style={{ fontSize: 12, color: isRejected ? '#dc2626' : '#d97706', padding: '3px 0', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
-                              <span>{isRejected ? '❌' : '⚠️'}</span>
-                              <span>{err}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+          const DocCard = ({ uiKey, label, desc, icon, required }: { uiKey: string, label: string, desc: string, icon: string, required?: boolean }) => {
+            const val = docValidation[uiKey]
+            const isRejected = val?.status === 'rejected'
+            const isWarning = val?.status === 'warning'
+            const isPassed = uploadedDocs[uiKey] && !isRejected
+            const borderColor = isRejected ? '#ef4444' : isWarning ? '#d97706' : isPassed ? '#16a34a' : '#e5e7eb'
+            const bgColor = isRejected ? '#fef2f2' : isWarning ? '#fffbeb' : isPassed ? '#f0fdf4' : '#fafafa'
+            return (
+              <div style={{ border: `1px solid ${borderColor}`, borderRadius: 10, padding: '14px 16px', background: bgColor }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>
+                      {icon} {label}
                     </div>
-                    {canEdit && (
-                      <label style={{ cursor: 'pointer', background: isRejected ? '#dc2626' : isPassed ? '#16a34a' : '#1e293b', color: '#fff', padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 12 }}>
-                        {uploadingDoc === doc.key ? 'Checking...' : isRejected ? 'Retry' : isPassed ? 'Replace' : 'Upload'}
-                        <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(doc.key, f) }} />
-                      </label>
+                    <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>{desc}</div>
+                    {isPassed && !isWarning && <div style={{ fontSize: 13, color: '#16a34a', marginTop: 4 }}>✅ {uploadedDocs[uiKey]}</div>}
+                    {isPassed && isWarning && <div style={{ fontSize: 13, color: '#d97706', marginTop: 4 }}>⚠️ {uploadedDocs[uiKey]}</div>}
+                    {val?.errors && val.errors.length > 0 && (
+                      <div style={{ marginTop: 6 }}>
+                        {val.errors.map((err: string, i: number) => (
+                          <div key={i} style={{ fontSize: 12, color: isRejected ? '#dc2626' : '#d97706', padding: '3px 0', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                            <span>{isRejected ? '❌' : '⚠️'}</span><span>{err}</span>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
+                  {canEdit && (
+                    <label style={{ cursor: 'pointer', background: isRejected ? '#dc2626' : isPassed ? '#16a34a' : '#1e293b', color: '#fff', padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 12 }}>
+                      {uploadingDoc === uiKey ? 'Checking...' : isRejected ? 'Retry' : isPassed ? 'Replace' : 'Upload'}
+                      <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(uiKey, f) }} />
+                    </label>
+                  )}
+                </div>
+              </div>
+            )
+          }
+
+          const validateDocs = () => {
+            const missing: string[] = []
+            // Check shareholder docs
+            shareholders.forEach((o: any) => {
+              const uiKey = `owner_${o.id}_identity`
+              if (!uploadedDocs[uiKey]) {
+                const name = o.company_name || `${o.first_name || ''} ${o.last_name || ''}`.trim()
+                missing.push(`${IDENTITY_TYPE_TO_LABEL[o.identity_type] || 'Identity'} for ${name}`)
+              }
+            })
+            // General docs are optional — no check needed
+            // Check for rejected docs
+            const hasRejected = Object.values(docValidation).some(v => v.status === 'rejected')
+            if (hasRejected) missing.push('Fix rejected documents')
+            return missing
+          }
+
+          return <>
+          <h3 style={h3}>Upload documents</h3>
+          <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 20 }}>Upload required documents for verification.</p>
+
+          {/* Section 1: Shareholder Identity Documents */}
+          {shareholders.length > 0 && (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Shareholder Documents</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                {shareholders.map((o: any) => {
+                  const uiKey = `owner_${o.id}_identity`
+                  const docLabel = IDENTITY_TYPE_TO_LABEL[o.identity_type] || 'Identity Document'
+                  const ownerName = o.company_name || `${o.first_name || ''} ${o.last_name || ''}`.trim()
+                  const identityIcon = o.identity_type === 'passport' ? '🛂' : o.identity_type === 'tradeLicense' ? '📋' : '🪪'
+                  return <DocCard key={uiKey} uiKey={uiKey} label={`${docLabel} — ${ownerName}`} desc={`Upload ${docLabel.toLowerCase()} for this shareholder`} icon={identityIcon} required />
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Section 2: General Documents */}
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>General Documents</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+            {GENERAL_DOCS.map(doc => (
+              <DocCard key={doc.key} uiKey={doc.key} label={doc.label} desc={doc.desc} icon={doc.icon} />
+            ))}
+          </div>
+
+          {/* Section 3: Other Business Documents (optional) */}
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Other Business Documents <span style={{ fontWeight: 400, color: '#9ca3af' }}>(optional)</span></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+            {otherDocSlots.map((slotId, idx) => {
+              const uiKey = `other_${slotId}`
+              return (
+                <div key={uiKey} style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                  <div style={{ flex: 1 }}>
+                    <DocCard uiKey={uiKey} label={`Additional Document #${idx + 1}`} desc="Any other supporting business documents" icon="🗂️" />
+                  </div>
+                  {canEdit && (
+                    <button onClick={() => {
+                      setOtherDocSlots(s => s.filter(id => id !== slotId))
+                      setUploadedDocs(d => { const n = { ...d }; delete n[uiKey]; return n })
+                      setDocValidation(v => { const n = { ...v }; delete n[uiKey]; return n })
+                    }} style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 8, padding: '0 10px', fontSize: 14, cursor: 'pointer', alignSelf: 'center' }}>✕</button>
+                  )}
                 </div>
               )
             })}
           </div>
+          {canEdit && (
+            <button onClick={() => {
+              setOtherDocSlots(s => [...s, otherDocCounter])
+              setOtherDocCounter(c => c + 1)
+            }} style={{ ...btnOutline, width: '100%', marginBottom: 20 }}>+ Add document</button>
+          )}
+
+          {docError && <p style={{ color: '#dc2626', fontSize: 13, marginBottom: 12 }}>{docError}</p>}
+
           <div style={{ display: 'flex', gap: 12 }}>
             <button style={btnOutline} onClick={() => setStep(2)}>← Back</button>
-            <button style={btnStyle} onClick={() => setStep(4)}>Next → Preview</button>
+            <button style={btnStyle} onClick={() => {
+              const missing = validateDocs()
+              if (missing.length > 0) {
+                setDocError(`Missing: ${missing.join(', ')}`)
+                return
+              }
+              setDocError('')
+              setStep(4)
+            }}>Next → Preview</button>
           </div>
-        </>}
+        </>})()}
 
         {/* ===== Step 4: Preview & Submit ===== */}
         {step === 4 && <>
@@ -708,32 +915,83 @@ export default function MerchantPage() {
           <Section title={`Owners & Signatories (${owners.length})`}>
             {owners.length === 0 ? (
               <p style={{ color: '#9ca3af', fontSize: 14 }}>No owners added</p>
-            ) : owners.map((o: any) => (
-              <div key={o.id} style={{ padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
-                <span style={{ fontWeight: 500 }}>
-                  {o.ownership_type === 'authorizedSignatory' ? '✍️' : '👤'}{' '}
-                  {o.company_name || `${o.first_name || ''} ${o.last_name || ''}`.trim()}
-                </span>
-                <span style={{ color: '#6b7280', fontSize: 13 }}>
-                  {' '}— {o.ownership_type === 'authorizedSignatory' ? 'Signatory' : `Shareholder (${o.owner_type})`}
-                  {o.identity_type ? `, ${o.identity_type}` : ''}
-                </span>
-              </div>
-            ))}
+            ) : owners.map((o: any) => {
+              const isExpanded = expandedOwners[o.id]
+              const name = o.company_name || `${o.first_name || ''} ${o.last_name || ''}`.trim()
+              return (
+                <div key={o.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                  <div
+                    onClick={() => setExpandedOwners(e => ({ ...e, [o.id]: !e[o.id] }))}
+                    style={{ padding: '8px 0', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 500 }}>
+                        {o.ownership_type === 'authorizedSignatory' ? '✍️' : '👤'} {name}
+                      </span>
+                      <span style={{ color: '#6b7280', fontSize: 13 }}>
+                        {' '}— {o.ownership_type === 'authorizedSignatory' ? 'Signatory' : `Shareholder (${o.owner_type})`}
+                      </span>
+                    </div>
+                    <span style={{ color: '#9ca3af', fontSize: 12 }}>{isExpanded ? '▲' : '▼'}</span>
+                  </div>
+                  {isExpanded && (
+                    <div style={{ padding: '4px 0 12px 28px', fontSize: 13 }}>
+                      {o.owner_type === 'corporate' ? (
+                        <Row label="Company Name" value={o.company_name} />
+                      ) : (
+                        <>
+                          <Row label="First Name" value={o.first_name} />
+                          <Row label="Last Name" value={o.last_name} />
+                        </>
+                      )}
+                      <Row label="Email" value={o.email} />
+                      <Row label="Identity Type" value={IDENTITY_TYPE_TO_LABEL[o.identity_type] || o.identity_type} />
+                      <Row label="Role" value={o.ownership_type === 'authorizedSignatory' ? 'Authorized Signatory' : 'Shareholder'} />
+                      <Row label="Type" value={o.owner_type === 'corporate' ? 'Corporate' : 'Individual'} />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </Section>
 
           {/* Documents Section */}
           <Section title={`Documents (${Object.keys(uploadedDocs).length})`}>
             {Object.keys(uploadedDocs).length === 0 ? (
               <p style={{ color: '#9ca3af', fontSize: 14 }}>No documents uploaded</p>
-            ) : Object.entries(uploadedDocs).map(([key, name]) => {
-              const doc = DOC_TYPES.find(d => d.key === key)
-              return (
-                <div key={key} style={{ padding: '6px 0', fontSize: 14 }}>
-                  {doc?.icon} <strong>{doc?.label || key}</strong>: {name}
-                </div>
-              )
-            })}
+            ) : <>
+              {/* Shareholder docs */}
+              {owners.filter((o: any) => o.ownership_type === 'shareHolder').map((o: any) => {
+                const uiKey = `owner_${o.id}_identity`
+                const ownerName = o.company_name || `${o.first_name || ''} ${o.last_name || ''}`.trim()
+                const docLabel = IDENTITY_TYPE_TO_LABEL[o.identity_type] || 'Identity'
+                const uploaded = uploadedDocs[uiKey]
+                return (
+                  <div key={uiKey} style={{ padding: '6px 0', fontSize: 14 }}>
+                    {uploaded ? '✅' : '⚠️'} <strong>{docLabel} — {ownerName}</strong>: {uploaded || <span style={{ color: '#dc2626' }}>Not uploaded</span>}
+                  </div>
+                )
+              })}
+              {/* General docs (optional — only show if uploaded) */}
+              {GENERAL_DOCS.map(doc => {
+                const uploaded = uploadedDocs[doc.key]
+                return uploaded ? (
+                  <div key={doc.key} style={{ padding: '6px 0', fontSize: 14 }}>
+                    ✅ {doc.icon} <strong>{doc.label}</strong>: {uploaded}
+                  </div>
+                ) : null
+              })}
+              {/* Other docs */}
+              {otherDocSlots.map((slotId, idx) => {
+                const uiKey = `other_${slotId}`
+                const uploaded = uploadedDocs[uiKey]
+                return uploaded ? (
+                  <div key={uiKey} style={{ padding: '6px 0', fontSize: 14 }}>
+                    🗂️ <strong>Additional Document #{idx + 1}</strong>: {uploaded}
+                  </div>
+                ) : null
+              })}
+            </>}
           </Section>
 
           {/* Submit / Confirm */}
