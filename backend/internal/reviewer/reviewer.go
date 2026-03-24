@@ -140,14 +140,14 @@ func GetApplication(db *sql.DB) gin.HandlerFunc {
 
 		// Load documents
 		docRows, _ := db.Query(`
-			SELECT id, doc_type, original_name, storage_path, validation_status, validation_details, uploaded_at
+			SELECT id, doc_type, original_name, storage_path, validation_status, validation_details, owner_id, uploaded_at
 			FROM documents WHERE application_id = $1
 		`, appID)
 		defer docRows.Close()
 		app.Documents = []Doc{}
 		for docRows.Next() {
 			var d Doc
-			docRows.Scan(&d.ID, &d.DocType, &d.OriginalName, &d.StoragePath, &d.ValidationStatus, &d.ValidationDetails, &d.UploadedAt)
+			docRows.Scan(&d.ID, &d.DocType, &d.OriginalName, &d.StoragePath, &d.ValidationStatus, &d.ValidationDetails, &d.OwnerID, &d.UploadedAt)
 			app.Documents = append(app.Documents, d)
 		}
 
@@ -176,6 +176,7 @@ type Doc struct {
 	StoragePath       string  `json:"storage_path"`
 	ValidationStatus  *string `json:"validation_status"`
 	ValidationDetails *string `json:"validation_details"`
+	OwnerID           *string `json:"owner_id"`
 	UploadedAt        string  `json:"uploaded_at"`
 }
 
