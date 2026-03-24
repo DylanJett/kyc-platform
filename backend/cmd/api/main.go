@@ -53,6 +53,7 @@ func main() {
 		api.POST("/application/documents", merchant.UploadDocument(database, store))
 		api.POST("/application/:id/documents", merchant.UploadDocumentForApp(database, store))
 		api.POST("/application/:id/owners", merchant.AddOwner(database))
+		api.PUT("/application/:id/owners/:ownerId", merchant.UpdateOwner(database))
 		api.DELETE("/application/:id/owners/:ownerId", merchant.DeleteOwner(database))
 		api.GET("/application/:id/owners", merchant.GetOwners(database))
 
