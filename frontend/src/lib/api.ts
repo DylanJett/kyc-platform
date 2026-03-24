@@ -83,10 +83,13 @@ export async function uploadDocument(file: File, docType: string) {
   return res.json()
 }
 
-export async function uploadDocumentForApp(appId: string, file: File, docType: string) {
+export async function uploadDocumentForApp(appId: string, file: File, docType: string, ownerId?: string, matchName?: string, businessName?: string) {
   const form = new FormData()
   form.append('file', file)
   form.append('doc_type', docType)
+  if (ownerId) form.append('owner_id', ownerId)
+  if (matchName) form.append('match_name', matchName)
+  if (businessName) form.append('business_name', businessName)
   const res = await fetch(`${API}/api/application/${appId}/documents`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${getToken()}` },
@@ -98,6 +101,13 @@ export async function uploadDocumentForApp(appId: string, file: File, docType: s
 export async function addOwner(appId: string, data: object) {
   const res = await fetch(`${API}/api/application/${appId}/owners`, {
     method: 'POST', headers: headers(), body: JSON.stringify(data)
+  })
+  return res.json()
+}
+
+export async function updateOwner(appId: string, ownerId: string, data: object) {
+  const res = await fetch(`${API}/api/application/${appId}/owners/${ownerId}`, {
+    method: 'PUT', headers: headers(), body: JSON.stringify(data)
   })
   return res.json()
 }
