@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/otiai10/gosseract/v2"
 )
 
 // ValidationResult holds the outcome of document validation
@@ -84,8 +86,10 @@ var DocTypeExpectation = map[string]struct {
 	},
 }
 
-// ValidateDocument reads the uploaded file content and validates it
-func ValidateDocument(fileData []byte, fileName string, claimedMIME string, docType string) ValidationResult {
+// ValidateDocument reads the uploaded file content and validates it.
+// matchName: for passport/identity_document, the expected person name.
+// businessName: for utility_bill/tax, the expected company name.
+func ValidateDocument(fileData []byte, fileName string, claimedMIME string, docType string, matchName string, businessName string) ValidationResult {
 	result := ValidationResult{Valid: true, Status: "passed", Errors: []string{}}
 
 	expectation, hasExpectation := DocTypeExpectation[docType]
@@ -150,7 +154,7 @@ func ValidateDocument(fileData []byte, fileName string, claimedMIME string, docT
 
 	// 5. PDF-specific validation
 	if strings.HasPrefix(detectedMIME, "application/pdf") || strings.HasSuffix(strings.ToLower(fileName), ".pdf") {
-		pdfResult := validatePDF(fileData, expectation)
+		pdfResult := validatePDF(fileData, expectation, docType, matchName, businessName)
 		if len(pdfResult.Errors) > 0 {
 			result.Errors = append(result.Errors, pdfResult.Errors...)
 			if pdfResult.Status == "rejected" {
@@ -177,6 +181,63 @@ func ValidateDocument(fileData []byte, fileName string, claimedMIME string, docT
 				result.Status = imgResult.Status
 			}
 		}
+
+		// OCR text extraction for name matching on images
+		if (docType == "passport" || docType == "identity_document") && matchName != "" {
+			ocrText := extractImageText(fileData)
+			if len(ocrText) > 0 {
+				textLower := strings.ToLower(ocrText)
+				nameParts := strings.Fields(strings.ToLower(matchName))
+				matchedParts := 0
+				for _, part := range nameParts {
+					if len(part) > 1 && strings.Contains(textLower, part) {
+						matchedParts++
+					}
+				}
+				if matchedParts == 0 {
+					if result.Status != "rejected" {
+						result.Status = "warning"
+					}
+					result.Errors = append(result.Errors, fmt.Sprintf(
+						"Name '%s' was not found in the document image. Please verify this document belongs to the correct person.", matchName))
+				}
+			} else {
+				if result.Status != "rejected" {
+					result.Status = "warning"
+				}
+				result.Errors = append(result.Errors, "Could not read text from the image — quality may be too low for name verification. Please upload a clearer image or a PDF.")
+			}
+		}
+		if (docType == "utility_bill" || docType == "tax") && businessName != "" {
+			ocrText := extractImageText(fileData)
+			if len(ocrText) > 0 {
+				textLower := strings.ToLower(ocrText)
+				skipWords := map[string]bool{"llc": true, "ltd": true, "inc": true, "fzco": true, "fz": true, "co": true}
+				nameParts := strings.Fields(strings.ToLower(businessName))
+				matchedParts, totalParts := 0, 0
+				for _, part := range nameParts {
+					if len(part) <= 2 || skipWords[part] {
+						continue
+					}
+					totalParts++
+					if strings.Contains(textLower, part) {
+						matchedParts++
+					}
+				}
+				if totalParts > 0 && matchedParts == 0 {
+					if result.Status != "rejected" {
+						result.Status = "warning"
+					}
+					result.Errors = append(result.Errors, fmt.Sprintf(
+						"Company name '%s' was not found in the document image. Please verify this document belongs to the correct company.", businessName))
+				}
+			} else {
+				if result.Status != "rejected" {
+					result.Status = "warning"
+				}
+				result.Errors = append(result.Errors, "Could not read text from the image — quality may be too low for company name verification. Please upload a clearer image or a PDF.")
+			}
+		}
 	}
 
 	// Build summary details
@@ -195,7 +256,7 @@ func validatePDF(data []byte, expectation struct {
 	MinSizeKB   int64
 	AllowedMIME []string
 	Keywords    []string
-}) ValidationResult {
+}, docType string, matchName string, businessName string) ValidationResult {
 	result := ValidationResult{Valid: true, Status: "passed", Errors: []string{}}
 
 	// Check PDF header
@@ -264,6 +325,51 @@ func validatePDF(data []byte, expectation struct {
 	if actualPages <= 0 {
 		result.Status = "warning"
 		result.Errors = append(result.Errors, "Could not determine page count — document may be empty")
+	}
+
+	// Name matching for identity documents (passport, emirates ID)
+	if (docType == "passport" || docType == "identity_document") && matchName != "" && len(textContent) > 0 {
+		textLower := strings.ToLower(textContent)
+		nameParts := strings.Fields(strings.ToLower(matchName))
+		matchedParts := 0
+		for _, part := range nameParts {
+			if len(part) > 1 && strings.Contains(textLower, part) {
+				matchedParts++
+			}
+		}
+		if matchedParts == 0 {
+			if result.Status != "rejected" {
+				result.Status = "warning"
+			}
+			result.Errors = append(result.Errors, fmt.Sprintf(
+				"Name '%s' was not found in the document. Please verify this document belongs to the correct shareholder.", matchName))
+		}
+	}
+
+	// Company name matching for utility bill / tax
+	if (docType == "utility_bill" || docType == "tax") && businessName != "" && len(textContent) > 0 {
+		textLower := strings.ToLower(textContent)
+		nameLower := strings.ToLower(businessName)
+		skipWords := map[string]bool{"llc": true, "ltd": true, "inc": true, "fzco": true, "fz": true, "co": true}
+		nameParts := strings.Fields(nameLower)
+		matchedParts := 0
+		totalParts := 0
+		for _, part := range nameParts {
+			if len(part) <= 2 || skipWords[part] {
+				continue
+			}
+			totalParts++
+			if strings.Contains(textLower, part) {
+				matchedParts++
+			}
+		}
+		if totalParts > 0 && matchedParts == 0 {
+			if result.Status != "rejected" {
+				result.Status = "warning"
+			}
+			result.Errors = append(result.Errors, fmt.Sprintf(
+				"Company name '%s' was not found in the document. Please verify this document belongs to the correct company.", businessName))
+		}
 	}
 
 	return result
@@ -403,6 +509,20 @@ func absDiff(a, b uint32) uint32 {
 		return a - b
 	}
 	return b - a
+}
+
+// extractImageText uses Tesseract OCR to extract text from an image
+func extractImageText(imageData []byte) string {
+	client := gosseract.NewClient()
+	defer client.Close()
+	if err := client.SetImageFromBytes(imageData); err != nil {
+		return ""
+	}
+	text, err := client.Text()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 // ReadAll reads the entire content from a reader
