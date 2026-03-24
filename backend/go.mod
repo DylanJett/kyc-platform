@@ -7,6 +7,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/lib/pq v1.10.9
 	github.com/minio/minio-go/v7 v7.0.70
+	github.com/otiai10/gosseract/v2 v2.4.1
 	golang.org/x/crypto v0.23.0
 )
 
