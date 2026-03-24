@@ -413,3 +413,25 @@ export const IDENTITY_TYPES: { value: string; label: string }[] = [
   { value: 'passport', label: 'Passport' },
   { value: 'tradeLicense', label: 'Trade License' },
 ]
+
+// General documents (optional)
+export const GENERAL_DOCS = [
+  { key: 'trade_license',             label: 'Trade License',              icon: '📋', desc: 'Official trade/business license' },
+  { key: 'memorandum_of_association', label: 'Memorandum of Association',  icon: '📜', desc: 'MOA or Articles of Association' },
+  { key: 'utility_bill',             label: 'Utility Bill',               icon: '🏠', desc: 'Recent utility bill for address verification' },
+  { key: 'tax',                      label: 'Tax Certificate',            icon: '🧾', desc: 'Tax registration certificate (TRN)' },
+]
+
+// Mapping: owner identity type → document type for upload
+export const IDENTITY_TYPE_TO_DOC_TYPE: Record<string, string> = {
+  emiratesId: 'identity_document',
+  passport: 'passport',
+  tradeLicense: 'trade_license',
+}
+
+// Mapping: owner identity type → display label
+export const IDENTITY_TYPE_TO_LABEL: Record<string, string> = {
+  emiratesId: 'Emirates ID',
+  passport: 'Passport',
+  tradeLicense: 'Trade License',
+}
