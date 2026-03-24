@@ -80,6 +80,7 @@ CREATE TABLE documents (
     file_size       BIGINT,
     validation_status  VARCHAR(20) DEFAULT 'pending',
     validation_details TEXT,
+    owner_id        UUID REFERENCES owners(id) ON DELETE SET NULL,
     uploaded_at     TIMESTAMP DEFAULT NOW()
 );
 
