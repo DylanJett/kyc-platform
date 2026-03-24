@@ -372,7 +372,9 @@ func uploadDocForApp(c *gin.Context, db *sql.DB, store *storage.MinIOClient, app
 
 	// Validate document content
 	claimedMIME := header.Header.Get("Content-Type")
-	validation := docvalidation.ValidateDocument(fileData, header.Filename, claimedMIME, docType)
+	matchName := c.PostForm("match_name")
+	businessNameCtx := c.PostForm("business_name")
+	validation := docvalidation.ValidateDocument(fileData, header.Filename, claimedMIME, docType, matchName, businessNameCtx)
 
 	// Reject invalid documents
 	if !validation.Valid {
@@ -394,14 +396,21 @@ func uploadDocForApp(c *gin.Context, db *sql.DB, store *storage.MinIOClient, app
 		return
 	}
 
+	// Optional owner_id for per-shareholder documents
+	ownerIDStr := c.PostForm("owner_id")
+	var ownerIDPtr interface{} = nil
+	if ownerIDStr != "" {
+		ownerIDPtr = ownerIDStr
+	}
+
 	var docID string
 	err = db.QueryRow(`
 		INSERT INTO documents (application_id, doc_type, original_name, storage_path, mime_type, file_size,
-		                       validation_status, validation_details)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
+		                       validation_status, validation_details, owner_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id
 	`, appID, docType, header.Filename, path,
 		claimedMIME, header.Size,
-		validation.Status, validation.Details,
+		validation.Status, validation.Details, ownerIDPtr,
 	).Scan(&docID)
 
 	if err != nil {
@@ -453,6 +462,44 @@ func AddOwner(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusCreated, gin.H{"id": id})
+	}
+}
+
+// UpdateOwner updates an existing owner
+func UpdateOwner(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		merchantID := c.GetString("user_id")
+		appID := c.Param("id")
+		ownerID := c.Param("ownerId")
+
+		var exists bool
+		db.QueryRow(`SELECT EXISTS(SELECT 1 FROM applications WHERE id=$1 AND merchant_id=$2)`,
+			appID, merchantID).Scan(&exists)
+		if !exists {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+			return
+		}
+
+		var req OwnerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		_, err := db.Exec(`
+			UPDATE owners SET ownership_type=$1, owner_type=$2, first_name=$3, last_name=$4,
+			       company_name=$5, email=$6, identity_type=$7
+			WHERE id=$8 AND application_id=$9
+		`, req.OwnershipType, req.OwnerType, req.FirstName, req.LastName,
+			req.CompanyName, req.Email, req.IdentityType,
+			ownerID, appID,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update owner"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Owner updated"})
 	}
 }
 
@@ -555,6 +602,7 @@ type DocInfo struct {
 	OriginalName      string  `json:"original_name"`
 	ValidationStatus  *string `json:"validation_status"`
 	ValidationDetails *string `json:"validation_details"`
+	OwnerID           *string `json:"owner_id"`
 	UploadedAt        string  `json:"uploaded_at"`
 }
 
@@ -576,7 +624,7 @@ func scanApplication(db *sql.DB, query string, args ...interface{}) (AppResponse
 
 func getDocuments(db *sql.DB, appID string) []DocInfo {
 	rows, err := db.Query(`
-		SELECT id, doc_type, original_name, validation_status, validation_details, uploaded_at
+		SELECT id, doc_type, original_name, validation_status, validation_details, owner_id, uploaded_at
 		FROM documents WHERE application_id = $1 ORDER BY uploaded_at
 	`, appID)
 	if err != nil {
@@ -587,7 +635,7 @@ func getDocuments(db *sql.DB, appID string) []DocInfo {
 	docs := []DocInfo{}
 	for rows.Next() {
 		var d DocInfo
-		rows.Scan(&d.ID, &d.DocType, &d.OriginalName, &d.ValidationStatus, &d.ValidationDetails, &d.UploadedAt)
+		rows.Scan(&d.ID, &d.DocType, &d.OriginalName, &d.ValidationStatus, &d.ValidationDetails, &d.OwnerID, &d.UploadedAt)
 		docs = append(docs, d)
 	}
 	return docs
