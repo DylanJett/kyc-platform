@@ -741,7 +741,10 @@ export default function MerchantPage() {
 
           <div style={{ display: 'flex', gap: 12 }}>
             <button style={btnOutline} onClick={() => setStep(1)}>← Back</button>
-            <button style={btnStyle} onClick={() => setStep(3)}>Next →</button>
+            <button style={btnStyle} onClick={async () => {
+              if (currentApp?.id) await loadOwners(currentApp.id)
+              setStep(3)
+            }} disabled={saving}>Next →</button>
           </div>
         </>})()}
 
