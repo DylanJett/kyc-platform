@@ -403,6 +403,29 @@ func uploadDocForApp(c *gin.Context, db *sql.DB, store *storage.MinIOClient, app
 		ownerIDPtr = ownerIDStr
 	}
 
+	// Delete previous document with same doc_type + owner_id to avoid duplicates
+	var oldPath string
+	var oldID string
+	var lookupErr error
+	if ownerIDStr != "" {
+		lookupErr = db.QueryRow(`
+			SELECT id, storage_path FROM documents
+			WHERE application_id = $1 AND doc_type = $2 AND owner_id = $3
+			LIMIT 1
+		`, appID, docType, ownerIDStr).Scan(&oldID, &oldPath)
+	} else {
+		lookupErr = db.QueryRow(`
+			SELECT id, storage_path FROM documents
+			WHERE application_id = $1 AND doc_type = $2 AND owner_id IS NULL
+			LIMIT 1
+		`, appID, docType).Scan(&oldID, &oldPath)
+	}
+	if lookupErr == nil && oldID != "" {
+		// Remove old file from storage and delete DB record
+		_ = store.DeleteObject(oldPath)
+		_, _ = db.Exec(`DELETE FROM documents WHERE id = $1`, oldID)
+	}
+
 	var docID string
 	err = db.QueryRow(`
 		INSERT INTO documents (application_id, doc_type, original_name, storage_path, mime_type, file_size,
