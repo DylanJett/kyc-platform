@@ -21,7 +21,7 @@ export default function ReviewerPage() {
   const [comment, setComment] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [filter, setFilter] = useState('')
+  const [filter, setFilter] = useState('pending')
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
@@ -173,8 +173,8 @@ export default function ReviewerPage() {
         <button onClick={logout} style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 8, padding: '6px 14px', cursor: 'pointer' }}>Sign out</button>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {['', 'pending', 'approved', 'rejected', 'needs_more_docs'].map(s => (
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        {['pending', 'approved', 'rejected', 'needs_more_docs', ''].map(s => (
           <button key={s} onClick={() => setFilter(s)} style={{ padding: '6px 14px', borderRadius: 20, border: 'none', background: filter === s ? '#1e293b' : '#e5e7eb', color: filter === s ? '#fff' : '#374151', cursor: 'pointer', fontSize: 13 }}>
             {s === '' ? 'All' : STATUS[s]?.label}
           </button>
