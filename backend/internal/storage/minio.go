@@ -102,6 +102,11 @@ func (m *MinIOClient) GetURL(path string) (string, error) {
 	return url.String(), nil
 }
 
+// DeleteObject removes a file from MinIO storage
+func (m *MinIOClient) DeleteObject(path string) error {
+	return m.client.RemoveObject(context.Background(), m.bucket, path, minio.RemoveObjectOptions{})
+}
+
 // StreamTo — стримит файл в writer
 func (m *MinIOClient) StreamTo(path string, w io.Writer) (string, int64, error) {
 	obj, info, err := m.GetObject(path)
