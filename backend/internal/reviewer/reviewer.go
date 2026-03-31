@@ -21,6 +21,7 @@ func ListApplications(db *sql.DB) gin.HandlerFunc {
 		}
 
 		statusFilter := c.Query("status")
+		excludeDraft := c.Query("exclude_draft") == "true"
 		query := `
 			SELECT a.id, u.full_name, u.email, a.business_name,
 			       a.country, a.mcc, a.status, a.created_at, a.updated_at
@@ -31,6 +32,8 @@ func ListApplications(db *sql.DB) gin.HandlerFunc {
 		if statusFilter != "" {
 			query += " WHERE a.status = $1"
 			args = append(args, statusFilter)
+		} else if excludeDraft {
+			query += " WHERE a.status != 'draft'"
 		}
 		query += " ORDER BY a.updated_at DESC"
 
