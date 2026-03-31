@@ -125,7 +125,10 @@ export async function getOwners(appId: string) {
 }
 
 export async function listApplications(status?: string) {
-  const url = status ? `${API}/api/applications?status=${status}` : `${API}/api/applications`
+  // Draft applications are never shown in the reviewer portal
+  const url = status
+    ? `${API}/api/applications?status=${status}`
+    : `${API}/api/applications?exclude_draft=true`
   const res = await fetch(url, { headers: headers() })
   return res.json()
 }
